@@ -591,6 +591,105 @@ Do not implement financial finalization beyond the minimum required integration 
 
 - None.
 
+## T08 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act as:
+- QA Specialist;
+- Specialist Architect;
+- Backend Developer 1 only for fixes within its ownership;
+- Backend Developer 2 only for fixes within its ownership;
+- Product Owner for final acceptance.
+
+Implement T08 only: concurrency acceptance, clean-clone validation, and the
+single quality command.
+
+Requirements:
+- Create make verify or an equivalent single validation command.
+- It must run formatting checks, go vet, unit tests, integration tests, race
+  detector, and Docker acceptance tests.
+- Execute deterministic concurrent load with 10 scales sending readings every
+  100 ms using a fixed seed.
+- Use distinct scale, truck, plate, and session combinations.
+- Assert at most one final weighing per session.
+- Assert no cross-scale or cross-plate association.
+- Do not use arbitrary sleeps; use polling with context deadlines.
+- Collect relevant Docker service logs on acceptance failure.
+- Validate all documented commands from a clean clone.
+- Implement both T08 Gherkin scenarios.
+
+Run the full quality gate and update docs/ai/prompt-log.md with the exact output.
+Do not mark the project complete if any required validation fails.
+```
+
+### Files changed
+
+- `Makefile` and `scripts/validate-clean-worktree.sh`
+- `docker-compose.yml`
+- `tests/acceptance/concurrent_load_test.go` and
+  `tests/acceptance/compose_test.go`
+- `docs/ai/prompt-log.md`
+
+### Architecture and implementation review
+
+- `make verify` is the single quality gate. It invokes a format check, vet,
+  uncached unit/integration/race tests, Docker acceptance, and repeats those
+  checks in a temporary local Git clone overlaid with the candidate worktree.
+  The clone excludes local `.env` and persistent Compose data.
+- The concurrent acceptance case creates ten distinct scale/truck/plate/session
+  identities and posts 32 timestamped samples at an exact 100 ms logical
+  cadence. Event IDs are UUIDv5 values derived from the fixed
+  `t08-fixed-seed-42`; results are therefore repeatable.
+- It uses real PostgreSQL and Redis containers, the production HTTP ingestion
+  service, stream worker, finalizer, and a context-bounded polling assertion.
+  It proves ten final sessions, no duplicated session, and exact scale/plate
+  mapping. No fixed sleep is used to await asynchronous business processing.
+- The Docker acceptance environment starts only explicit runtime services, so
+  the `test` service cannot recursively start `make verify`; it uses isolated
+  ports/projects and collects the last 200 log lines from API, worker,
+  PostgreSQL, Redis, migration, Prometheus, and Grafana on failure.
+- Review conclusion: concurrent scales are isolated correctly within the
+  current worker/session-manager process. Horizontal worker ownership by scale
+  remains a future scale-out partitioning decision, not a T08 scope change.
+
+### Exact validation output
+
+```text
+$ go test -count=1 -tags=acceptance -run 'TestGherkinConcurrentTenScaleLoadHasNoCrossAssociation|TestGherkinQualityCommandFailsIdentifiablyInCleanWorktree' -v ./tests/acceptance/...
+--- PASS: TestGherkinQualityCommandFailsIdentifiablyInCleanWorktree
+--- PASS: TestGherkinConcurrentTenScaleLoadHasNoCrossAssociation
+PASS
+ok   scale-challenge/tests/acceptance
+
+$ make verify
+go vet ./...
+go test -count=1 ./...
+go test -count=1 -tags=integration ./internal/...
+go test -count=1 -race ./...
+go test -count=1 -tags=acceptance ./tests/acceptance/...
+./scripts/validate-clean-worktree.sh
+Creating clean clone at <temporary directory>
+go vet ./...
+go test -count=1 ./...
+go test -count=1 -tags=integration ./internal/...
+go test -count=1 -race ./...
+go test -count=1 -tags=acceptance ./tests/acceptance/...
+Clean worktree validation passed
+
+exit status: 0
+```
+
+### Product acceptance
+
+- T08 is accepted: both Gherkin scenarios are automated, Docker failures
+  retain service diagnostics, and the final quality gate completed with exit
+  status 0. This is acceptance of T08 only; it does not declare the overall
+  project complete.
+
 ## T07 monitoring addendum — 2026-07-17
 
 ### Exact prompt

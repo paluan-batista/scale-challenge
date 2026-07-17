@@ -178,6 +178,7 @@ services:
       context: .
       target: test
     command: make verify
+    profiles: ["test"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 

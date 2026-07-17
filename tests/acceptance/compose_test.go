@@ -25,7 +25,7 @@ func TestFoundationTopologyAndDeterministicScenarioFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, required := range []string{"api:", "worker:", "postgres:", "redis:", "simulator:", "test:", "profiles: [\"simulator\"]", "condition: service_healthy"} {
+	for _, required := range []string{"api:", "worker:", "postgres:", "redis:", "prometheus:", "grafana:", "simulator:", "test:", "profiles: [\"simulator\"]", "profiles: [\"test\"]", "condition: service_healthy"} {
 		if !strings.Contains(string(contents), required) {
 			t.Errorf("compose topology is missing %q", required)
 		}
@@ -57,15 +57,28 @@ func TestGherkinSuccessFullEnvironment(t *testing.T) {
 		t.Skipf("Docker Compose prerequisite is unavailable: %s", strings.TrimSpace(string(output)))
 	}
 	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for _, service := range []string{"api", "worker", "postgres", "redis", "migrate", "prometheus", "grafana"} {
+			output, err := compose.run("logs", "--no-color", "--tail", "200", service)
+			if err != nil {
+				t.Logf("collect Compose logs for %s failed: %v: %s", service, err, strings.TrimSpace(string(output)))
+				continue
+			}
+			t.Logf("Compose logs for %s:\n%s", service, strings.TrimSpace(string(output)))
+		}
+	})
+	t.Cleanup(func() {
 		if output, err := compose.run("down", "--volumes", "--remove-orphans"); err != nil {
 			t.Logf("compose cleanup failed: %v: %s", err, strings.TrimSpace(string(output)))
 		}
 	})
 
-	if output, err := compose.run("up", "--build", "-d"); err != nil {
+	if output, err := compose.run("up", "--build", "-d", "api", "worker", "prometheus", "grafana"); err != nil {
 		t.Fatalf("start Compose environment: %v: %s", err, strings.TrimSpace(string(output)))
 	}
-	for _, service := range []string{"api", "worker", "postgres", "redis"} {
+	for _, service := range []string{"api", "worker", "postgres", "redis", "prometheus", "grafana"} {
 		if err := compose.waitForHealth(service); err != nil {
 			t.Fatal(err)
 		}
@@ -76,6 +89,20 @@ func TestGherkinSuccessFullEnvironment(t *testing.T) {
 		_ = response.Body.Close()
 		t.Fatalf("API readiness status = %d, want %d", response.StatusCode, http.StatusOK)
 	} else {
+		_ = response.Body.Close()
+	}
+	for name, endpoint := range map[string]string{
+		"Prometheus": "http://127.0.0.1:" + compose.prometheusPort + "/-/healthy",
+		"Grafana":    "http://127.0.0.1:" + compose.grafanaPort + "/api/health",
+	} {
+		response, err := (&http.Client{Timeout: 5 * time.Second}).Get(endpoint)
+		if err != nil {
+			t.Fatalf("call %s health endpoint: %v", name, err)
+		}
+		if response.StatusCode != http.StatusOK {
+			_ = response.Body.Close()
+			t.Fatalf("%s health status = %d, want %d", name, response.StatusCode, http.StatusOK)
+		}
 		_ = response.Body.Close()
 	}
 	if output, err := compose.run("run", "--rm", "seed"); err != nil {
@@ -157,6 +184,30 @@ func TestGherkinErrorServiceMissingRequiredVariableFailsWithoutSecret(t *testing
 	}
 }
 
+func TestGherkinQualityCommandFailsIdentifiablyInCleanWorktree(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := t.TempDir()
+	fakeMake := filepath.Join(fakeBin, "make")
+	if err := os.WriteFile(fakeMake, []byte("#!/usr/bin/env sh\necho 'intentional format failure' >&2\nexit 23\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "validate-clean-worktree.sh"))
+	command.Dir = root
+	command.Env = append(withoutEnvironment("PATH"), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("clean-worktree validation succeeded after an intentional format-check failure")
+	}
+	if !strings.Contains(string(output), "intentional format failure") {
+		t.Fatalf("clean-worktree failure was not identifiable: %s", output)
+	}
+}
+
 func withoutEnvironment(names ...string) []string {
 	blocked := make(map[string]struct{}, len(names))
 	for _, name := range names {
@@ -176,10 +227,12 @@ func withoutEnvironment(names ...string) []string {
 }
 
 type composeRunner struct {
-	path    string
-	prefix  []string
-	env     []string
-	apiPort string
+	path           string
+	prefix         []string
+	env            []string
+	apiPort        string
+	prometheusPort string
+	grafanaPort    string
 }
 
 func newComposeRunner(t testing.TB) (composeRunner, bool) {
@@ -193,24 +246,36 @@ func newComposeRunner(t testing.TB) (composeRunner, bool) {
 	if err != nil {
 		return composeRunner{}, false
 	}
+	apiPort := reservePort(t, "API")
+	prometheusPort := reservePort(t, "Prometheus")
+	grafanaPort := reservePort(t, "Grafana")
+	project := fmt.Sprintf("scale-challenge-acceptance-%d", os.Getpid())
+	return composeRunner{
+		path:           path,
+		prefix:         prefix,
+		apiPort:        apiPort,
+		prometheusPort: prometheusPort,
+		grafanaPort:    grafanaPort,
+		env: append(os.Environ(),
+			"COMPOSE_PROJECT_NAME="+project,
+			"API_PORT="+apiPort,
+			"PROMETHEUS_PORT="+prometheusPort,
+			"GRAFANA_PORT="+grafanaPort,
+		),
+	}, true
+}
+
+func reservePort(t testing.TB, service string) string {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("reserve local API port: %v", err)
+		t.Fatalf("reserve local %s port: %v", service, err)
 	}
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 	if err := listener.Close(); err != nil {
-		t.Fatalf("release local API port: %v", err)
+		t.Fatalf("release local %s port: %v", service, err)
 	}
-	project := fmt.Sprintf("scale-challenge-acceptance-%d", os.Getpid())
-	return composeRunner{
-		path:    path,
-		prefix:  prefix,
-		apiPort: port,
-		env: append(os.Environ(),
-			"COMPOSE_PROJECT_NAME="+project,
-			"API_PORT="+port,
-		),
-	}, true
+	return port
 }
 
 func (runner composeRunner) run(arguments ...string) ([]byte, error) {
