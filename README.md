@@ -1,1 +1,1 @@
-# balance-challenge
+# scale-challenge
