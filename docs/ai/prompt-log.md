@@ -336,3 +336,76 @@ Adjust corrections required for QA Specialist.
 - None within the authorized T01 Architect, Backend Developer 2, and QA scope.
 - T02 typed identifiers and guarded down-migration drops remain an explicit
   ownership boundary requiring Backend Developer 1 authorization.
+
+## T03 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Backend Developer 1;
+- Backend Developer 2;
+- QA Specialist.
+
+Implement T03 only: authenticated asynchronous scale-reading ingestion.
+
+Requirements:
+- Implement POST /v1/scale-readings.
+- Enforce a 64 KiB request body limit and HTTP read/write/idle timeouts.
+- Authenticate Authorization: Bearer device keys against stored hashes.
+- Validate active scale and scale_id consistency.
+- Validate event_id, scale_id, plate, weight_grams greater than zero, and RFC3339 measured_at.
+- Normalize plate and add received_at in UTC RFC3339Nano.
+- Publish to Redis Stream scale-readings using XADD.
+- Return 202 Accepted only after Redis confirms publication.
+- Return 400 for malformed JSON, 401 for invalid credentials, 403 for disabled
+  or mismatched scale, 422 for valid-but-invalid business payload, and 503 when
+  Redis is unavailable.
+- Do not persist raw readings in PostgreSQL.
+- Do not create a goroutine per request.
+- Implement all T03 Gherkin scenarios with real Redis integration tests.
+
+Run all required validation commands and update docs/ai/prompt-log.md.
+Do not start T04.
+```
+
+### Files changed
+
+- `cmd/api/main.go`, `cmd/api/main_test.go`
+- `internal/application/service.go`, `internal/domain/domain.go`
+- `internal/httpapi/server.go`, `internal/httpapi/scale_readings_integration_test.go`
+- `internal/repository/redis.go`
+- `docs/openapi/openapi.yaml`, `docs/ai/prompt-log.md`
+
+### Implementation and QA evidence
+
+- The API uses a 64 KiB `http.MaxBytesReader`, strict single-object JSON
+  decoding, bounded server read/write/idle timeouts, and no request goroutine.
+- Device keys are compared with persisted bcrypt hashes. A matched disabled
+  scale, or a matched key paired with a different `scale_id`, returns 403.
+- Accepted events are normalized and sent only through Redis `XADD` to
+  `scale-readings`. `received_at` and `measured_at` are serialized in UTC using
+  `time.RFC3339Nano`; the PostgreSQL row-count assertion proves ingestion does
+  not synchronously persist a raw reading or business mutation.
+- Real PostgreSQL 16 and Redis 7 Testcontainers cover both T03 Gherkin
+  scenarios: exactly one accepted stream message, invalid credentials, invalid
+  business input, Redis unavailability, malformed and oversized JSON, disabled
+  scale, and device/scale mismatch. Error responses include `code`, `message`,
+  and `request_id`.
+
+| Command | Result |
+| --- | --- |
+| `gofmt -d $(rg --files -g '*.go')` | Passed: no formatting diff. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed. |
+| `go test -tags=integration ./internal/...` | Passed against real PostgreSQL 16 and Redis 7 Testcontainers; includes all T03 Gherkin scenarios. |
+| `go test -race ./...` | Passed. |
+| `go test -race -tags=integration ./internal/httpapi/...` | Passed against real PostgreSQL and Redis while exercising T03 ingestion paths. |
+| `make verify` | Passed: formatting, vet, unit, real integration, race, and acceptance suites. |
+
+### Blockers
+
+- None. T04 stabilization, sessions, consumer groups, worker processing, and
+  final-weighing persistence were not started.

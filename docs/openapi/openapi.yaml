@@ -1,8 +1,36 @@
 openapi: 3.1.0
 info:
   title: Grain weighing registrations API
-  version: 0.2.0
+  version: 0.3.0
 paths:
+  /v1/scale-readings:
+    post:
+      summary: Authenticate a scale and enqueue a reading in Redis Streams
+      parameters:
+        - in: header
+          name: Authorization
+          required: true
+          schema: { type: string, example: "Bearer device-key" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_id, scale_id, plate, weight_grams, measured_at]
+              properties:
+                event_id: { type: string, format: uuid }
+                scale_id: { type: string }
+                plate: { type: string, description: Normalized to seven uppercase alphanumeric characters }
+                weight_grams: { type: integer, format: int64, minimum: 1 }
+                measured_at: { type: string, format: date-time }
+      responses:
+        '202': { description: Redis confirmed XADD to scale-readings }
+        '400': { description: Malformed or oversized JSON body }
+        '401': { description: Missing or invalid device key }
+        '403': { description: Disabled scale or scale/device-key mismatch }
+        '422': { description: Business-invalid reading }
+        '503': { description: Redis unavailable }
   /v1/branches:
     get: { summary: List branches, responses: { '200': { description: OK } } }
     post: { summary: Create branch, responses: { '201': { description: Created }, '422': { description: Validation error } } }

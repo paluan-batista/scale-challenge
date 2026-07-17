@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"scale-challenge/internal/application"
 	"scale-challenge/internal/bootstrap"
@@ -27,7 +28,7 @@ func main() {
 		}
 		return
 	}
-	if err := bootstrap.RequiredEnvironment("DATABASE_URL"); err != nil {
+	if err := bootstrap.RequiredEnvironment("DATABASE_URL", "REDIS_ADDR"); err != nil {
 		log.Print(err)
 		os.Exit(2)
 	}
@@ -45,13 +46,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer database.Close()
+	redisClient := redis.NewClient(&redis.Options{Addr: os.Getenv("REDIS_ADDR")})
+	defer redisClient.Close()
 
 	address := os.Getenv("API_ADDR")
 	if address == "" {
 		address = ":8080"
 	}
 
-	service := application.New(repository.NewPostgres(database))
+	service := application.New(repository.NewPostgres(database), repository.NewRedisReadingPublisher(redisClient))
 	server := newServer(address, httpapi.New(service).Router())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

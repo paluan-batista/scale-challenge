@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -44,9 +45,25 @@ type Store interface {
 	CancelTransportTransaction(context.Context, string) (domain.TransportTransaction, error)
 }
 
-type Service struct{ store Store }
+// ReadingPublisher is the asynchronous boundary for accepted device readings.
+// Its implementation must confirm Redis XADD before returning nil.
+type ReadingPublisher interface {
+	Publish(context.Context, domain.ScaleReading) error
+}
 
-func New(store Store) *Service { return &Service{store: store} }
+type Service struct {
+	store     Store
+	publisher ReadingPublisher
+	now       func() time.Time
+}
+
+func New(store Store, publishers ...ReadingPublisher) *Service {
+	service := &Service{store: store, now: time.Now}
+	if len(publishers) > 0 {
+		service.publisher = publishers[0]
+	}
+	return service
+}
 
 type BranchInput struct {
 	Code string `json:"code"`
@@ -73,6 +90,14 @@ type TransportInput struct {
 	BranchID    string `json:"branch_id"`
 	TruckID     string `json:"truck_id"`
 	GrainTypeID string `json:"grain_type_id"`
+}
+
+type ScaleReadingInput struct {
+	EventID     string `json:"event_id"`
+	ScaleID     string `json:"scale_id"`
+	Plate       string `json:"plate"`
+	WeightGrams int64  `json:"weight_grams"`
+	MeasuredAt  string `json:"measured_at"`
 }
 
 func (s *Service) CreateBranch(ctx context.Context, input BranchInput) (domain.Branch, error) {
@@ -228,6 +253,80 @@ func (s *Service) TransitionTransportTransaction(ctx context.Context, id, status
 		return domain.TransportTransaction{}, fmt.Errorf("%w: transport transaction changed concurrently", domain.ErrConflict)
 	}
 	return updated, err
+}
+
+// IngestScaleReading authenticates a device key, validates its normalized
+// event, and only then publishes it asynchronously. It intentionally makes no
+// PostgreSQL write for the raw reading.
+func (s *Service) IngestScaleReading(ctx context.Context, bearerKey string, input ScaleReadingInput) error {
+	scale, err := s.authenticateScale(ctx, bearerKey)
+	if err != nil {
+		return err
+	}
+	if !scale.Active {
+		return domain.ErrForbidden
+	}
+	reading, err := normalizeReading(input, s.now().UTC())
+	if err != nil {
+		return err
+	}
+	if scale.ScaleID != reading.ScaleID {
+		return domain.ErrForbidden
+	}
+	if s.publisher == nil {
+		return domain.ErrUnavailable
+	}
+	if err := s.publisher.Publish(ctx, reading); err != nil {
+		return fmt.Errorf("%w: publish scale reading: %v", domain.ErrUnavailable, err)
+	}
+	return nil
+}
+
+func (s *Service) authenticateScale(ctx context.Context, bearerKey string) (domain.Scale, error) {
+	key := strings.TrimSpace(bearerKey)
+	if key == "" {
+		return domain.Scale{}, domain.ErrUnauthorized
+	}
+	scales, err := s.store.ListScales(ctx)
+	if err != nil {
+		return domain.Scale{}, err
+	}
+	for _, scale := range scales {
+		if bcrypt.CompareHashAndPassword([]byte(scale.APIKeyHash), []byte(key)) == nil {
+			return scale, nil
+		}
+	}
+	return domain.Scale{}, domain.ErrUnauthorized
+}
+
+func normalizeReading(input ScaleReadingInput, receivedAt time.Time) (domain.ScaleReading, error) {
+	eventID, err := uuid.Parse(strings.TrimSpace(input.EventID))
+	if err != nil {
+		return domain.ScaleReading{}, validation("event_id must be a UUID")
+	}
+	scaleID := domain.NormalizeCode(input.ScaleID)
+	if scaleID == "" {
+		return domain.ScaleReading{}, validation("scale_id is required")
+	}
+	plate := domain.NormalizePlate(input.Plate)
+	if err := domain.ValidatePlate(plate); err != nil {
+		return domain.ScaleReading{}, validation(err.Error())
+	}
+	if input.WeightGrams <= 0 {
+		return domain.ScaleReading{}, validation("weight_grams must be greater than zero")
+	}
+	measuredAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.MeasuredAt))
+	if err != nil {
+		return domain.ScaleReading{}, validation("measured_at must be an RFC3339 timestamp")
+	}
+	return domain.ScaleReading{
+		EventID:     eventID.String(),
+		ScaleID:     scaleID,
+		Plate:       plate,
+		WeightGrams: input.WeightGrams,
+		MeasuredAt:  measuredAt.UTC(),
+		ReceivedAt:  receivedAt.UTC(),
+	}, nil
 }
 
 func truckValue(id string, input TruckInput) (domain.Truck, error) {

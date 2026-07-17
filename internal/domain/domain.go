@@ -9,9 +9,12 @@ import (
 )
 
 var (
-	ErrNotFound   = errors.New("not found")
-	ErrConflict   = errors.New("conflict")
-	ErrValidation = errors.New("validation failed")
+	ErrNotFound     = errors.New("not found")
+	ErrConflict     = errors.New("conflict")
+	ErrValidation   = errors.New("validation failed")
+	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
+	ErrUnavailable  = errors.New("unavailable")
 )
 
 type Branch struct {
@@ -65,6 +68,17 @@ type TransportTransaction struct {
 	MarginPolicyBPSSnapshot    int32     `json:"margin_policy_bps_snapshot"`
 	CreatedAt                  time.Time `json:"created_at"`
 	UpdatedAt                  time.Time `json:"updated_at"`
+}
+
+// ScaleReading is the normalized asynchronous ingestion event. Raw readings
+// live only in Redis Streams until a later worker consumes them.
+type ScaleReading struct {
+	EventID     string
+	ScaleID     string
+	Plate       string
+	WeightGrams int64
+	MeasuredAt  time.Time
+	ReceivedAt  time.Time
 }
 
 func NormalizeCode(value string) string { return strings.ToUpper(strings.TrimSpace(value)) }

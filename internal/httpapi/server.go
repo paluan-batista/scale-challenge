@@ -4,9 +4,12 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"scale-challenge/internal/application"
 	"scale-challenge/internal/domain"
@@ -19,6 +22,7 @@ func New(service *application.Service) *Handler { return &Handler{service: servi
 func (h *Handler) Router() http.Handler {
 	router := chi.NewRouter()
 	router.Route("/v1", func(router chi.Router) {
+		router.Post("/scale-readings", h.scaleReadings)
 		router.Route("/branches", h.branches)
 		router.Route("/scales", h.scales)
 		router.Route("/trucks", h.trucks)
@@ -26,6 +30,56 @@ func (h *Handler) Router() http.Handler {
 		router.Route("/transport-transactions", h.transportTransactions)
 	})
 	return router
+}
+
+func (h *Handler) scaleReadings(w http.ResponseWriter, r *http.Request) {
+	var input application.ScaleReadingInput
+	if !decodeScaleReading(w, r, &input) {
+		return
+	}
+	key, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		respondReadingError(w, r, http.StatusUnauthorized, "unauthorized", "invalid credentials")
+		return
+	}
+	err := h.service.IngestScaleReading(r.Context(), key, input)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	case errors.Is(err, domain.ErrUnauthorized):
+		respondReadingError(w, r, http.StatusUnauthorized, "unauthorized", "invalid credentials")
+	case errors.Is(err, domain.ErrForbidden):
+		respondReadingError(w, r, http.StatusForbidden, "forbidden", "scale is disabled or does not match the device key")
+	case errors.Is(err, domain.ErrValidation):
+		respondReadingError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+	case errors.Is(err, domain.ErrUnavailable):
+		respondReadingError(w, r, http.StatusServiceUnavailable, "redis_unavailable", "reading stream is unavailable")
+	default:
+		respondReadingError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
+	}
+}
+
+func decodeScaleReading(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		respondReadingError(w, r, http.StatusBadRequest, "malformed_json", "malformed request body")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		respondReadingError(w, r, http.StatusBadRequest, "malformed_json", "malformed request body")
+		return false
+	}
+	return true
+}
+
+func bearerToken(header string) (string, bool) {
+	scheme, token, found := strings.Cut(strings.TrimSpace(header), " ")
+	if !found || scheme != "Bearer" || strings.TrimSpace(token) == "" || strings.Contains(strings.TrimSpace(token), " ") {
+		return "", false
+	}
+	return token, true
 }
 
 func (h *Handler) branches(router chi.Router) {
@@ -185,6 +239,10 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 		respondError(w, http.StatusBadRequest, "malformed request body")
 		return false
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, "malformed request body")
+		return false
+	}
 	return true
 }
 func respondCreated(w http.ResponseWriter, value any, err error) {
@@ -217,4 +275,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func respondReadingError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	w.Header().Set("X-Request-ID", requestID)
+	writeJSON(w, status, map[string]string{"code": code, "message": message, "request_id": requestID})
 }

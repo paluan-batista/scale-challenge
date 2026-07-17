@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestHealthEndpoints(t *testing.T) {
@@ -17,6 +18,13 @@ func TestHealthEndpoints(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusOK)
 		}
+	}
+}
+
+func TestServerUsesBoundedHTTPTimeouts(t *testing.T) {
+	server := newServer(":0", http.NotFoundHandler())
+	if server.ReadHeaderTimeout != 5*time.Second || server.ReadTimeout != 10*time.Second || server.WriteTimeout != 10*time.Second || server.IdleTimeout != 60*time.Second {
+		t.Fatalf("timeouts = header:%s read:%s write:%s idle:%s", server.ReadHeaderTimeout, server.ReadTimeout, server.WriteTimeout, server.IdleTimeout)
 	}
 }
 
