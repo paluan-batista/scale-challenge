@@ -591,6 +591,133 @@ Do not implement financial finalization beyond the minimum required integration 
 
 - None.
 
+## T07 monitoring addendum — 2026-07-17
+
+### Exact prompt
+
+```text
+You should include Grafana and Prometheus in the docker-compose file so you can display the working graphs and metrics.
+```
+
+### Files changed
+
+- `docker-compose.yml`, `.env.example`, and `docs/ai/prompt-log.md`
+- `deploy/prometheus/prometheus.yml`
+- `deploy/grafana/provisioning/datasources/prometheus.yaml`
+- `deploy/grafana/provisioning/dashboards/dashboard.yaml`
+- `deploy/grafana/dashboards/scale-operations.json`
+
+### Evidence
+
+- Prometheus scrapes the API’s existing `/metrics` endpoint every five seconds
+  and retains local development samples for seven days.
+- Grafana provisions the Prometheus datasource and a non-editable Scale
+  operations dashboard showing ingestion/failure rates, Streams backlog
+  (lag/pending/DLQ), and hourly finalized weighings. Both UIs are loopback-only
+  mapped through configurable ports and retain state in named Docker volumes.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `jq -e . deploy/grafana/dashboards/scale-operations.json` | Passed. |
+| `docker-compose config` | Passed. Docker Compose v2 is unavailable locally, so the compatible legacy client validated the complete topology. |
+
+## T07 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Product Owner;
+- Backend Developer 1;
+- QA Specialist.
+
+Implement T07 only: reports, health endpoints, logs, and metrics.
+
+Requirements:
+- Implement reports filtered by branch, grain type, and date range.
+- Use aggregate SQL only over finalized weighings.
+- Return net weight, total cost, average purchase price, average applied margin,
+  and completed transport count.
+- Avoid N+1 queries.
+- Add indexes for weighed_at, branch_id, grain_type_id, and finalized status.
+- Implement /health/live, /health/ready, and /metrics.
+- Add structured JSON logs.
+- Add metrics for ingestion, stabilization, stream lag, pending messages, DLQ,
+  and processing failures.
+- Return 422 for invalid date range.
+- Return 200 with zero totals and an empty list when no data matches.
+- Implement all T07 Gherkin scenarios.
+- Update OpenAPI with examples.
+
+Run all validation commands and update docs/ai/prompt-log.md.
+Do not begin final documentation task yet.
+```
+
+### Files changed
+
+- `cmd/api/main.go`, `cmd/api/main_test.go`, and `cmd/worker/main.go`
+- `db/migrations/000004_t07_reporting_indexes.up.sql` and
+  `db/migrations/000004_t07_reporting_indexes.down.sql`
+- `internal/reports/reports.go` and `internal/reports/reports_integration_test.go`
+- `internal/observability/metrics.go` and
+  `internal/observability/metrics_integration_test.go`
+- `internal/httpapi/server.go` and
+  `internal/httpapi/reports_integration_test.go`
+- `internal/worker/worker.go`, `internal/worker/finalizing_processor.go`, and
+  `docs/openapi/openapi.yaml`, `docs/ai/prompt-log.md`
+
+### Implementation and product evidence
+
+- `GET /v1/reports/weighings` accepts optional `branch_id`, `grain_type_id`,
+  `start`, and `end` filters. One indexed SQL grouping query joins only `FINAL`
+  weighings whose transport remains `WEIGHED`; it has no per-item follow-up
+  query. Its result contains aggregate rows plus overall totals.
+- The query returns integer grams and minor money units. Average purchase price
+  and applied margin are rounded integer snapshots; zero matches return HTTP
+  200 with zero totals and a non-nil empty `items` list. Invalid timestamp or
+  reverse date ranges return 422.
+- T07 migration adds dedicated indexes for `weighed_at`, branch ID, grain type
+  ID, and the finalized transport status. No report is computed from raw
+  readings or non-final business state.
+- API liveness is process-only; readiness pings PostgreSQL and Redis with a
+  bounded request context and returns 503 if either is unavailable. `/metrics`
+  emits Prometheus text with API/worker Redis-backed ingestion, stabilization,
+  processing-failure counters and live stream lag, PEL pending, and DLQ gauges.
+- API request and API/worker lifecycle logs now use standard-library `slog`
+  JSON handlers. OpenAPI documents health, metrics, report filters, zero-range
+  behavior, and a concrete aggregate response. No final documentation task or
+  reporting beyond this requested endpoint was started.
+
+### QA evidence
+
+- Real PostgreSQL coverage proves branch/grain and date filtering, finalized
+  transport-only aggregation, totals, empty output, and invalid-range
+  rejection. HTTP coverage proves 422/200 report behavior.
+- Real Redis coverage creates a consumer group, pending entry, stream lag, and
+  DLQ entry; it verifies Prometheus output for all required operational metric
+  categories. Readiness failure and metrics routing are covered at server level.
+- Existing finalization/worker race and integration suites remain green with
+  the shared Redis metrics counters enabled.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `gofmt -w cmd/api/main.go cmd/worker/main.go internal/reports/reports.go internal/observability/metrics_integration_test.go` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed, including real PostgreSQL and Redis reporting/metrics scenarios. |
+| `go test -race ./...` | Passed. |
+| `make verify` | Passed: format check, vet, unit/integration, race, and acceptance targets. |
+| `docker build --no-cache --target worker -t scale-worker:t07 .` then `docker build --target worker -t scale-worker:t07 .` | Passed; the no-cache rebuild cleared a stale local legacy layer that lacked a build artifact. |
+
+### Blockers
+
+- None.
+
 ## T06 — 2026-07-17
 
 ### Exact prompt

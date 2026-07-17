@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -18,6 +21,24 @@ func TestHealthEndpoints(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusOK)
 		}
+	}
+}
+
+func TestReadinessCanReportUnavailableAndMetricsAreExposed(t *testing.T) {
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = w.Write([]byte("scale_stream_lag 0\n"))
+	})
+	server := newServer(":0", http.NotFoundHandler(), serverOptions{readiness: func(context.Context) error { return errors.New("postgres unavailable") }, metrics: metrics})
+	ready := httptest.NewRecorder()
+	server.Handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unready status = %d, want 503", ready.Code)
+	}
+	metricResponse := httptest.NewRecorder()
+	server.Handler.ServeHTTP(metricResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metricResponse.Code != http.StatusOK || !strings.Contains(metricResponse.Body.String(), "scale_stream_lag 0") {
+		t.Fatalf("metrics response = %d %q", metricResponse.Code, metricResponse.Body.String())
 	}
 }
 

@@ -1,0 +1,49 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {"expr": "rate(scale_ingestion_accepted_total[5m])", "legendFormat": "accepted / sec", "refId": "A"},
+        {"expr": "rate(scale_ingestion_failures_total[5m])", "legendFormat": "ingestion failures / sec", "refId": "B"},
+        {"expr": "rate(scale_processing_failures_total[5m])", "legendFormat": "processing failures / sec", "refId": "C"}
+      ],
+      "title": "Ingestion and processing rates",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [
+        {"expr": "scale_stream_lag", "legendFormat": "stream lag", "refId": "A"},
+        {"expr": "scale_pending_messages", "legendFormat": "pending", "refId": "B"},
+        {"expr": "scale_dead_letter_messages", "legendFormat": "dead letters", "refId": "C"}
+      ],
+      "title": "Redis Streams backlog",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [{"expr": "increase(scale_stabilization_finalized_total[1h])", "legendFormat": "finalized weighings", "refId": "A"}],
+      "title": "Finalized weighings (last hour)",
+      "type": "stat"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "tags": ["scale", "operations"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Scale operations",
+  "uid": "scale-operations",
+  "version": 1
+}

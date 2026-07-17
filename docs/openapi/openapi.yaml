@@ -1,8 +1,20 @@
 openapi: 3.1.0
 info:
   title: Grain weighing registrations API
-  version: 0.3.0
+  version: 0.7.0
 paths:
+  /health/live:
+    get:
+      summary: Process liveness probe
+      responses: { '200': { description: Process is running } }
+  /health/ready:
+    get:
+      summary: Dependency readiness probe
+      responses: { '200': { description: PostgreSQL and Redis are reachable }, '503': { description: A required dependency is unavailable } }
+  /metrics:
+    get:
+      summary: Prometheus operational metrics
+      responses: { '200': { description: Prometheus text exposition } }
   /v1/scale-readings:
     post:
       summary: Authenticate a scale and enqueue a reading in Redis Streams
@@ -60,3 +72,21 @@ paths:
   /v1/transport-transactions/{id}: { get: { summary: Get transport transaction, responses: { '200': { description: OK } } } }
   /v1/transport-transactions/{id}/status:
     patch: { summary: Cancel an OPEN transaction; WEIGHED is reserved for finalization, responses: { '200': { description: Cancelled }, '409': { description: Invalid transition } } }
+  /v1/reports/weighings:
+    get:
+      summary: Aggregate finalized weighings by branch and grain type
+      parameters:
+        - { in: query, name: branch_id, schema: { type: string, example: "branch-001" } }
+        - { in: query, name: grain_type_id, schema: { type: string, example: "grain-001" } }
+        - { in: query, name: start, schema: { type: string, format: date-time, example: "2026-07-01T00:00:00Z" } }
+        - { in: query, name: end, schema: { type: string, format: date-time, example: "2026-07-31T23:59:59Z" } }
+      responses:
+        '200':
+          description: Finalized-only aggregate report; an empty range has zero totals and an empty items list
+          content:
+            application/json:
+              example:
+                totals: { net_weight_grams: 2000000000, total_cost_minor: 250000, average_purchase_price_minor: 125000, average_applied_margin_bps: 1250, completed_transport_count: 1 }
+                items:
+                  - { branch_id: "branch-001", branch_code: "BR", grain_type_id: "grain-001", grain_type_code: "SOY", net_weight_grams: 2000000000, total_cost_minor: 250000, average_purchase_price_minor: 125000, average_applied_margin_bps: 1250, completed_transport_count: 1 }
+        '422': { description: start is later than end or a date value is invalid }

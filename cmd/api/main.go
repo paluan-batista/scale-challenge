@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,19 +17,22 @@ import (
 	"scale-challenge/internal/application"
 	"scale-challenge/internal/bootstrap"
 	"scale-challenge/internal/httpapi"
+	"scale-challenge/internal/observability"
+	"scale-challenge/internal/reports"
 	"scale-challenge/internal/repository"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := checkHealth(); err != nil {
-			log.Print(err)
+			slog.Error("api health check failed", "error", err)
 			os.Exit(1)
 		}
 		return
 	}
 	if err := bootstrap.RequiredEnvironment("DATABASE_URL", "REDIS_ADDR"); err != nil {
-		log.Print(err)
+		slog.Error("api configuration invalid", "error", err)
 		os.Exit(2)
 	}
 	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), 10*time.Second)
@@ -42,7 +45,7 @@ func main() {
 		if database != nil {
 			database.Close()
 		}
-		log.Printf("connect PostgreSQL: %v", err)
+		slog.Error("connect PostgreSQL", "error", err)
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -55,7 +58,17 @@ func main() {
 	}
 
 	service := application.New(repository.NewPostgres(database), repository.NewRedisReadingPublisher(redisClient))
-	server := newServer(address, httpapi.New(service).Router())
+	counters := observability.NewRedisCounters(redisClient)
+	handler := httpapi.New(service, httpapi.WithReports(reports.New(database)), httpapi.WithMetrics(counters)).Router()
+	server := newServer(address, handler, serverOptions{
+		metrics: counters.Handler(repository.ScaleReadingsStream, "weighing-workers", "scale-readings-dlq"),
+		readiness: func(ctx context.Context) error {
+			if err := database.Ping(ctx); err != nil {
+				return err
+			}
+			return redisClient.Ping(ctx).Err()
+		},
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -64,20 +77,33 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("api shutdown: %v", err)
+			slog.Error("api shutdown", "error", err)
 		}
 	}()
 
-	log.Printf("api bootstrap listening on %s", address)
+	slog.Info("api listening", "address", address)
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		slog.Error("api serve", "error", err)
+		os.Exit(1)
 	}
 }
 
-func newServer(address string, applicationHandler http.Handler) *http.Server {
+type serverOptions struct {
+	readiness func(context.Context) error
+	metrics   http.Handler
+}
+
+func newServer(address string, applicationHandler http.Handler, options ...serverOptions) *http.Server {
+	option := serverOptions{}
+	if len(options) > 0 {
+		option = options[0]
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health/live", healthHandler)
-	mux.HandleFunc("GET /health/ready", healthHandler)
+	mux.HandleFunc("GET /health/live", liveHandler)
+	mux.HandleFunc("GET /health/ready", readyHandler(option.readiness))
+	if option.metrics != nil {
+		mux.Handle("GET /metrics", option.metrics)
+	}
 	mux.Handle("/v1/", applicationHandler)
 
 	return &http.Server{
@@ -90,9 +116,25 @@ func newServer(address string, applicationHandler http.Handler) *http.Server {
 	}
 }
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
+func liveHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func readyHandler(readiness func(context.Context) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if readiness != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			if err := readiness(ctx); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
+				return
+			}
+		}
+		liveHandler(w, r)
+	}
 }
 
 func checkHealth() error {

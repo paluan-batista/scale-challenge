@@ -7,6 +7,7 @@ import (
 
 	"scale-challenge/internal/domain"
 	"scale-challenge/internal/finalization"
+	"scale-challenge/internal/observability"
 	"scale-challenge/internal/stabilizer"
 )
 
@@ -20,6 +21,7 @@ type FinalizingProcessor struct {
 	manager   *stabilizer.Manager
 	ledger    Processor
 	finalizer *finalization.Service
+	counter   observability.Counter
 
 	mu      sync.Mutex
 	pending map[string]pendingWork
@@ -30,11 +32,15 @@ type pendingWork struct {
 	input *finalization.Input
 }
 
-func NewFinalizingProcessor(manager *stabilizer.Manager, ledger Processor, finalizer *finalization.Service) (*FinalizingProcessor, error) {
+func NewFinalizingProcessor(manager *stabilizer.Manager, ledger Processor, finalizer *finalization.Service, counters ...observability.Counter) (*FinalizingProcessor, error) {
 	if manager == nil || ledger == nil || finalizer == nil {
 		return nil, errors.New("stabilizer manager, ledger, and finalizer are required")
 	}
-	return &FinalizingProcessor{manager: manager, ledger: ledger, finalizer: finalizer, pending: make(map[string]pendingWork)}, nil
+	var counter observability.Counter
+	if len(counters) > 0 {
+		counter = counters[0]
+	}
+	return &FinalizingProcessor{manager: manager, ledger: ledger, finalizer: finalizer, counter: counter, pending: make(map[string]pendingWork)}, nil
 }
 
 func (p *FinalizingProcessor) Process(ctx context.Context, event Event) error {
@@ -79,6 +85,9 @@ func (p *FinalizingProcessor) Process(ctx context.Context, event Event) error {
 			return permanent(err)
 		}
 		return err
+	}
+	if p.counter != nil {
+		p.counter.Inc(ctx, observability.StabilizationFinalized)
 	}
 	delete(p.pending, event.EventID)
 	return nil

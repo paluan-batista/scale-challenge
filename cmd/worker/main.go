@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,20 +16,22 @@ import (
 
 	"scale-challenge/internal/bootstrap"
 	"scale-challenge/internal/finalization"
+	"scale-challenge/internal/observability"
 	"scale-challenge/internal/stabilizer"
 	streamworker "scale-challenge/internal/worker"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := checkHealth(); err != nil {
-			log.Print(err)
+			slog.Error("worker health check failed", "error", err)
 			os.Exit(1)
 		}
 		return
 	}
 	if err := bootstrap.RequiredEnvironment("DATABASE_URL", "REDIS_ADDR"); err != nil {
-		log.Print(err)
+		slog.Error("worker configuration invalid", "error", err)
 		os.Exit(2)
 	}
 
@@ -38,7 +40,7 @@ func main() {
 
 	database, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Printf("open PostgreSQL: %v", err)
+		slog.Error("open PostgreSQL", "error", err)
 		return
 	}
 	defer database.Close()
@@ -47,30 +49,31 @@ func main() {
 
 	config, err := workerConfigFromEnvironment()
 	if err != nil {
-		log.Printf("invalid worker configuration: %v", err)
+		slog.Error("invalid worker configuration", "error", err)
 		return
 	}
 	manager, err := stabilizer.New(stabilizer.DefaultConfig())
 	if err != nil {
-		log.Printf("initialize stabilizer: %v", err)
+		slog.Error("initialize stabilizer", "error", err)
 		return
 	}
-	processor, err := streamworker.NewFinalizingProcessor(manager, streamworker.NewPostgresLedger(database), finalization.New(database))
+	counters := observability.NewRedisCounters(client)
+	processor, err := streamworker.NewFinalizingProcessor(manager, streamworker.NewPostgresLedger(database), finalization.New(database), counters)
 	if err != nil {
-		log.Printf("initialize finalization processor: %v", err)
+		slog.Error("initialize finalization processor", "error", err)
 		return
 	}
-	worker, err := streamworker.New(client, processor, config)
+	worker, err := streamworker.New(client, processor, config, counters)
 	if err != nil {
-		log.Printf("initialize stream worker: %v", err)
+		slog.Error("initialize stream worker", "error", err)
 		return
 	}
-	log.Printf("worker started consumer=%s stream=%s group=%s", config.ConsumerName, config.Stream, config.Group)
+	slog.Info("worker started", "consumer", config.ConsumerName, "stream", config.Stream, "group", config.Group)
 	if err := worker.Run(ctx); err != nil && ctx.Err() == nil {
-		log.Printf("worker stopped with error: %v", err)
+		slog.Error("worker stopped with error", "error", err)
 		return
 	}
-	log.Print("worker stopped")
+	slog.Info("worker stopped")
 }
 
 func workerConfigFromEnvironment() (streamworker.Config, error) {

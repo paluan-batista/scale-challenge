@@ -19,6 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"scale-challenge/internal/domain"
+	"scale-challenge/internal/observability"
 	"scale-challenge/internal/repository"
 )
 
@@ -140,18 +141,23 @@ type Worker struct {
 	processor Processor
 	config    Config
 	metrics   Metrics
+	counter   observability.Counter
 	recoverMu sync.Mutex
 	claimFrom string
 }
 
-func New(client redis.UniversalClient, processor Processor, config Config) (*Worker, error) {
+func New(client redis.UniversalClient, processor Processor, config Config, counters ...observability.Counter) (*Worker, error) {
 	if client == nil || processor == nil {
 		return nil, errors.New("redis client and processor are required")
 	}
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	return &Worker{redis: client, processor: processor, config: config, claimFrom: "0-0"}, nil
+	var counter observability.Counter
+	if len(counters) > 0 {
+		counter = counters[0]
+	}
+	return &Worker{redis: client, processor: processor, config: config, counter: counter, claimFrom: "0-0"}, nil
 }
 
 func (w *Worker) Metrics() MetricSnapshot { return w.metrics.Snapshot() }
@@ -176,7 +182,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	for ctx.Err() == nil {
 		if _, err := w.Recover(ctx); err != nil && ctx.Err() == nil {
-			w.metrics.failures.Add(1)
+			w.recordFailure(ctx)
 			if !w.retryPause(ctx) {
 				break
 			}
@@ -191,7 +197,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 		if _, err := w.Pending(ctx); err != nil && ctx.Err() == nil {
-			w.metrics.failures.Add(1)
+			w.recordFailure(ctx)
 		}
 	}
 	return ctx.Err()
@@ -270,17 +276,17 @@ func (w *Worker) processMessages(ctx context.Context, messages []redis.XMessage)
 func (w *Worker) processMessage(ctx context.Context, message redis.XMessage) error {
 	attempts, err := w.incrementAttempt(ctx, message.ID)
 	if err != nil {
-		w.metrics.failures.Add(1)
+		w.recordFailure(ctx)
 		return fmt.Errorf("increment retry attempt: %w", err)
 	}
 
 	event, parseErr := parseEvent(message)
 	if parseErr != nil {
-		w.metrics.failures.Add(1)
+		w.recordFailure(ctx)
 		return w.deadLetter(ctx, message, attempts, parseErr.Error())
 	}
 	if err := w.processor.Process(ctx, event); err != nil {
-		w.metrics.failures.Add(1)
+		w.recordFailure(ctx)
 		var permanent *PermanentError
 		if errors.As(err, &permanent) {
 			return w.deadLetter(ctx, message, attempts, permanent.Error())
@@ -294,13 +300,13 @@ func (w *Worker) processMessage(ctx context.Context, message redis.XMessage) err
 	}
 
 	if err := w.redis.XAck(ctx, w.config.Stream, w.config.Group, message.ID).Err(); err != nil {
-		w.metrics.failures.Add(1)
+		w.recordFailure(ctx)
 		return fmt.Errorf("ack processed message %s: %w", message.ID, err)
 	}
 	if err := w.redis.Del(ctx, retryKey(message.ID)).Err(); err != nil {
 		// The durable event is already safe and acknowledged. TTL bounds this
 		// cleanup failure; returning it prevents pretending Redis was healthy.
-		w.metrics.failures.Add(1)
+		w.recordFailure(ctx)
 		return fmt.Errorf("delete retry metadata for %s: %w", message.ID, err)
 	}
 	w.metrics.processed.Add(1)
@@ -347,6 +353,13 @@ func (w *Worker) Pending(ctx context.Context) (uint64, error) {
 	}
 	w.metrics.pending.Store(uint64(pending.Count))
 	return uint64(pending.Count), nil
+}
+
+func (w *Worker) recordFailure(ctx context.Context) {
+	w.metrics.failures.Add(1)
+	if w.counter != nil {
+		w.counter.Inc(ctx, observability.ProcessingFailures)
+	}
 }
 
 func retryKey(messageID string) string { return retryKeyPrefix + messageID }
