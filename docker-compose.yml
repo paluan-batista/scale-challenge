@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-scale}
+      POSTGRES_USER: ${POSTGRES_USER:-scale}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scale-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      API_ADDR: :8080
+      DATABASE_URL: postgresql://${POSTGRES_USER:-scale}:${POSTGRES_PASSWORD:-scale-local-only}@postgres:5432/${POSTGRES_DB:-scale}?sslmode=disable
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-scale}:${POSTGRES_PASSWORD:-scale-local-only}@postgres:5432/${POSTGRES_DB:-scale}?sslmode=disable
+      REDIS_ADDR: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  simulator:
+    build:
+      context: .
+      target: simulator
+    profiles: ["simulator"]
+    command: ["--base-url", "http://api:8080", "--scenario", "/app/testdata/scenarios/happy-path.json", "--seed", "42"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  test:
+    build:
+      context: .
+      target: test
+    command: make verify
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  postgres-data:

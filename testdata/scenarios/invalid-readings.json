@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "invalid-readings",
+  "seed": 42,
+  "frequency_ms": 100,
+  "context": {
+    "branch_code": "BR-001",
+    "grain_code": "SOY",
+    "truck_plate": "ABC1D23",
+    "scale_id": "scale-001",
+    "purchase_price_minor": 125000,
+    "inventory_target_grams": 100000000,
+    "transport_state": "OPEN",
+    "device_key_environment": "SCALE_001_API_KEY"
+  },
+  "readings": [
+    {"scale_id": "scale-001", "plate": "UNKNOWN0", "weight_grams": 42850300, "measured_at": "2026-07-17T12:00:00Z", "event_id": "duplicate-event"},
+    {"scale_id": "scale-001", "plate": "ABC1D23", "weight_grams": 0, "measured_at": "2026-07-17T12:00:00.100Z", "event_id": "invalid-weight"},
+    {"scale_id": "scale-001", "plate": "ABC1D23", "weight_grams": 42850300, "measured_at": "2026-07-17T12:00:00.200Z", "event_id": "duplicate-event"}
+  ]
+}
