@@ -409,3 +409,84 @@ Do not start T04.
 
 - None. T04 stabilization, sessions, consumer groups, worker processing, and
   final-weighing persistence were not started.
+
+## T04 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Backend Developer 2;
+- QA Specialist.
+
+Implement T04 only: deterministic weight stabilization and weighing session state machine.
+
+Requirements:
+- Keep the implementation isolated from HTTP, Redis, and PostgreSQL.
+- Implement EMPTY, COLLECTING, CANDIDATE, FINALIZED, ABANDONED, and FAILED states.
+- Use bounded per-session ring buffers keyed by scale_id and normalized plate.
+- Require at least 30 samples over at least 3 seconds.
+- Calculate median, P05, P95, dispersion, and weight/time slope.
+- Apply absolute and percentage tolerances.
+- Require two consecutive stable windows before FINALIZED.
+- Use the median of the final stable window as the final weight.
+- Reject out-of-order timestamps with typed errors.
+- Do not use float for final weight.
+- Add hysteresis and release behavior through low-weight threshold, plate change,
+  or timeout.
+- Create table-driven tests for stable noise, outlier, increase, decrease,
+  insufficient samples, out-of-order timestamps, lost stability, and T04 Gherkin scenarios.
+
+Run all required validation commands and update docs/ai/prompt-log.md.
+Do not implement worker consumption yet.
+```
+
+### Files changed
+
+- `internal/stabilizer/stabilizer.go`
+- `internal/stabilizer/stabilizer_test.go`
+- `docs/ai/prompt-log.md`
+
+### Implementation and QA evidence
+
+- `internal/stabilizer` is a pure Go package that accepts only reading values
+  and returns state/audit values; it imports no HTTP, Redis, PostgreSQL, or
+  worker code.
+- Active sessions are keyed by uppercased `scale_id` and normalized plate. Each
+  owns a fixed-capacity ring; the manager also bounds active session count.
+- A ready window requires at least 30 samples and a three-second duration. It
+  calculates integer median, nearest-rank P05/P95, dispersion, and an exact
+  rational Theil-Sen weight/time slope. No `float32` or `float64` is used.
+- Stability requires absolute dispersion, basis-point percentage dispersion,
+  and slope limits to all pass. Two consecutive stable sliding windows produce
+  one `FINALIZED` result whose integer weight is that final window's median.
+- `Finalization` carries the algorithm version, sample count, dispersion,
+  rational slope, and UTC stabilization timestamp for the T06 persistence
+  boundary; no database write is performed in T04.
+- A typed `OutOfOrderTimestampError` transitions the affected session to
+  `FAILED`. `Expire` emits `ABANDONED` for incomplete sessions and releases
+  finalized sessions to `EMPTY`; low weight and a plate change also release a
+  finalized passage.
+- Table-driven tests cover stable noise, a single outlier, increase, decrease,
+  insufficient samples, lost stability, out-of-order timestamps, all three
+  tolerances, bounded ring/session memory, hysteresis, release, and both T04
+  Gherkin scenarios.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `gofmt -w $(find . -type f -name '*.go' -not -path './vendor/*')` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed. |
+| `go test -race ./...` | Passed. |
+| `go test ./internal/stabilizer` | Passed. |
+| `go test -race ./internal/stabilizer` | Passed. |
+| `rg -n '\\bfloat(32|64)\\b' internal/stabilizer` | Passed with no matches. |
+
+### Blockers
+
+- None. Redis Streams consumption, ACK/recovery/DLQ, and final-weighing
+  persistence remain intentionally deferred to T05 and T06.
