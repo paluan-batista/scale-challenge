@@ -1,0 +1,88 @@
+{
+  "info": {
+    "_postman_id": "5cf8937a-491d-4295-a2c2-ef951eed5c2e",
+    "name": "Scale Challenge API",
+    "description": "All public Scale Challenge endpoints. Run the Create requests first: their test scripts save IDs for the dependent requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "scaleApiKey", "value": "postman-scale-key" },
+    { "key": "branchId", "value": "" },
+    { "key": "scaleId", "value": "" },
+    { "key": "truckId", "value": "" },
+    { "key": "grainTypeId", "value": "" },
+    { "key": "transportTransactionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Operational",
+      "item": [
+        { "name": "Live", "request": { "method": "GET", "url": "{{baseUrl}}/health/live" } },
+        { "name": "Ready", "request": { "method": "GET", "url": "{{baseUrl}}/health/ready" } },
+        { "name": "Metrics", "request": { "method": "GET", "url": "{{baseUrl}}/metrics" } }
+      ]
+    },
+    {
+      "name": "Branches",
+      "item": [
+        { "name": "Create", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"PMBR\",\n  \"name\": \"Postman branch\"\n}" }, "url": "{{baseUrl}}/v1/branches" }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('branchId', pm.response.json().id);"] } }] },
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/v1/branches" } },
+        { "name": "Get", "request": { "method": "GET", "url": "{{baseUrl}}/v1/branches/{{branchId}}" } },
+        { "name": "Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"PMBR\",\n  \"name\": \"Postman branch updated\"\n}" }, "url": "{{baseUrl}}/v1/branches/{{branchId}}" } }
+      ]
+    },
+    {
+      "name": "Scales",
+      "item": [
+        { "name": "Create", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"branch_id\": \"{{branchId}}\",\n  \"scale_id\": \"postman-scale\",\n  \"name\": \"Postman scale\",\n  \"api_key\": \"{{scaleApiKey}}\"\n}" }, "url": "{{baseUrl}}/v1/scales" }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('scaleId', pm.response.json().id);"] } }] },
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/v1/scales" } },
+        { "name": "Get", "request": { "method": "GET", "url": "{{baseUrl}}/v1/scales/{{scaleId}}" } },
+        { "name": "Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"branch_id\": \"{{branchId}}\",\n  \"scale_id\": \"postman-scale\",\n  \"name\": \"Postman scale updated\",\n  \"api_key\": \"{{scaleApiKey}}\"\n}" }, "url": "{{baseUrl}}/v1/scales/{{scaleId}}" } }
+      ]
+    },
+    {
+      "name": "Trucks",
+      "item": [
+        { "name": "Create", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"plate\": \"PMT0001\",\n  \"tare_weight_grams\": 12000\n}" }, "url": "{{baseUrl}}/v1/trucks" }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('truckId', pm.response.json().id);"] } }] },
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/v1/trucks" } },
+        { "name": "Get", "request": { "method": "GET", "url": "{{baseUrl}}/v1/trucks/{{truckId}}" } },
+        { "name": "Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"plate\": \"PMT0001\",\n  \"tare_weight_grams\": 12500\n}" }, "url": "{{baseUrl}}/v1/trucks/{{truckId}}" } }
+      ]
+    },
+    {
+      "name": "Grain types",
+      "item": [
+        { "name": "Create", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"PMSOY\",\n  \"name\": \"Postman soy\",\n  \"purchase_price_minor\": 125000,\n  \"inventory_target_grams\": 100000000,\n  \"margin_policy_bps\": 2000\n}" }, "url": "{{baseUrl}}/v1/grain-types" }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('grainTypeId', pm.response.json().id);"] } }] },
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/v1/grain-types" } },
+        { "name": "Get", "request": { "method": "GET", "url": "{{baseUrl}}/v1/grain-types/{{grainTypeId}}" } },
+        { "name": "Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"code\": \"PMSOY\",\n  \"name\": \"Postman soy updated\",\n  \"purchase_price_minor\": 126000,\n  \"inventory_target_grams\": 100000000,\n  \"margin_policy_bps\": 2000\n}" }, "url": "{{baseUrl}}/v1/grain-types/{{grainTypeId}}" } }
+      ]
+    },
+    {
+      "name": "Transport transactions",
+      "item": [
+        { "name": "Create OPEN", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"branch_id\": \"{{branchId}}\",\n  \"truck_id\": \"{{truckId}}\",\n  \"grain_type_id\": \"{{grainTypeId}}\"\n}" }, "url": "{{baseUrl}}/v1/transport-transactions" }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('created', () => pm.response.to.have.status(201));", "pm.collectionVariables.set('transportTransactionId', pm.response.json().id);"] } }] },
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/v1/transport-transactions" } },
+        { "name": "Get", "request": { "method": "GET", "url": "{{baseUrl}}/v1/transport-transactions/{{transportTransactionId}}" } }
+      ]
+    },
+    {
+      "name": "Readings and reports",
+      "item": [
+        { "name": "Enqueue scale reading", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{scaleApiKey}}" }], "body": { "mode": "raw", "raw": "{\n  \"event_id\": \"{{$guid}}\",\n  \"scale_id\": \"postman-scale\",\n  \"plate\": \"PMT0001\",\n  \"weight_grams\": 2012000,\n  \"measured_at\": \"{{$isoTimestamp}}\"\n}" }, "url": "{{baseUrl}}/v1/scale-readings" } },
+        { "name": "Final weighing report", "request": { "method": "GET", "url": "{{baseUrl}}/v1/reports/weighings?branch_id={{branchId}}&grain_type_id={{grainTypeId}}&start=2026-01-01T00:00:00Z&end=2026-12-31T23:59:59Z" } }
+      ]
+    },
+    {
+      "name": "Deactivate (run last)",
+      "item": [
+        { "name": "Cancel OPEN transport transaction", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"CANCELLED\"\n}" }, "url": "{{baseUrl}}/v1/transport-transactions/{{transportTransactionId}}/status" } },
+        { "name": "Deactivate scale", "request": { "method": "POST", "url": "{{baseUrl}}/v1/scales/{{scaleId}}/deactivate" } },
+        { "name": "Deactivate truck", "request": { "method": "POST", "url": "{{baseUrl}}/v1/trucks/{{truckId}}/deactivate" } },
+        { "name": "Deactivate grain type", "request": { "method": "POST", "url": "{{baseUrl}}/v1/grain-types/{{grainTypeId}}/deactivate" } },
+        { "name": "Deactivate branch", "request": { "method": "POST", "url": "{{baseUrl}}/v1/branches/{{branchId}}/deactivate" } }
+      ]
+    }
+  ]
+}
