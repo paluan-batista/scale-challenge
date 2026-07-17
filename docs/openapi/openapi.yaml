@@ -1,0 +1,34 @@
+openapi: 3.1.0
+info:
+  title: Grain weighing registrations API
+  version: 0.2.0
+paths:
+  /v1/branches:
+    get: { summary: List branches, responses: { '200': { description: OK } } }
+    post: { summary: Create branch, responses: { '201': { description: Created }, '422': { description: Validation error } } }
+  /v1/branches/{id}:
+    get: { summary: Get branch, responses: { '200': { description: OK }, '404': { description: Not found } } }
+    put: { summary: Update active branch, responses: { '200': { description: OK } } }
+  /v1/branches/{id}/deactivate:
+    post: { summary: Safely deactivate branch, responses: { '200': { description: OK } } }
+  /v1/scales:
+    get: { summary: List scales, responses: { '200': { description: OK } } }
+    post: { summary: Create scale; api_key is stored only as api_key_hash, responses: { '201': { description: Created } } }
+  /v1/scales/{id}: { get: { summary: Get scale, responses: { '200': { description: OK } } }, put: { summary: Update scale, responses: { '200': { description: OK } } } }
+  /v1/scales/{id}/deactivate: { post: { summary: Safely deactivate scale, responses: { '200': { description: OK } } } }
+  /v1/trucks:
+    get: { summary: List trucks, responses: { '200': { description: OK } } }
+    post: { summary: Create truck with normalized unique plate and integer tare grams, responses: { '201': { description: Created }, '409': { description: Duplicate plate } } }
+  /v1/trucks/{id}: { get: { summary: Get truck, responses: { '200': { description: OK } } }, put: { summary: Update truck, responses: { '200': { description: OK } } } }
+  /v1/trucks/{id}/deactivate: { post: { summary: Safely deactivate truck, responses: { '200': { description: OK } } } }
+  /v1/grain-types:
+    get: { summary: List grain types, responses: { '200': { description: OK } } }
+    post: { summary: Create grain type using purchase_price_minor, responses: { '201': { description: Created } } }
+  /v1/grain-types/{id}: { get: { summary: Get grain type, responses: { '200': { description: OK } } }, put: { summary: Update grain type, responses: { '200': { description: OK } } } }
+  /v1/grain-types/{id}/deactivate: { post: { summary: Safely deactivate grain type, responses: { '200': { description: OK } } } }
+  /v1/transport-transactions:
+    get: { summary: List transport transactions, responses: { '200': { description: OK } } }
+    post: { summary: Open transport transaction with price and margin snapshots, responses: { '201': { description: Created }, '409': { description: Existing OPEN transaction } } }
+  /v1/transport-transactions/{id}: { get: { summary: Get transport transaction, responses: { '200': { description: OK } } } }
+  /v1/transport-transactions/{id}/status:
+    patch: { summary: Cancel an OPEN transaction; WEIGHED is reserved for finalization, responses: { '200': { description: Cancelled }, '409': { description: Invalid transition } } }

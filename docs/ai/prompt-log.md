@@ -141,3 +141,198 @@ Adjust corrections required for QA Specialist.
 | `go test -tags=acceptance -v ./tests/acceptance/...` | Passed: deterministic fixture and all error cases. Full Compose Gherkin scenario skipped with explicit prerequisite evidence. |
 | `make verify` | Passed, including real PostgreSQL/Redis Testcontainers integration. |
 | `docker build --target api|worker|simulator|test ...` | All four targets passed. |
+
+## T02 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Product Owner;
+- Backend Developer 1;
+- QA Specialist.
+
+Implement T02 only: explicit CRUD for branches, scales, trucks, grain types,
+and transport transactions.
+
+Requirements:
+- Implement create, list, get by ID, update, and safe deactivate for branches,
+  scales, trucks, and grain types.
+- Never physically delete an entity referenced by a transaction or weighing.
+- Implement transport transaction create, list, get, controlled state transition,
+  and cancellation before final weighing.
+- Create PostgreSQL migrations, SQLC queries, repositories, application services,
+  HTTP handlers, OpenAPI documentation, and tests.
+- Use normalized unique truck plates and unique scale_id.
+- Store only api_key_hash.
+- Use int64 for grams and NUMERIC or explicit smallest-unit representation for money.
+- Enforce one OPEN transaction per truck with business rules and a database constraint.
+- Implement every T02 Gherkin scenario, including success and error behavior.
+- Do not implement Redis worker or stabilization logic.
+
+Run:
+- gofmt
+- go vet ./...
+- go test ./...
+- go test -race ./...
+
+Update docs/ai/prompt-log.md with evidence.
+```
+
+### Files changed
+
+- `README.md`, `.env.example`, `Dockerfile`, `docker-compose.yml`, `Makefile`, `go.mod`, `go.sum`, `sqlc.yaml`
+- `db/migrations/000001_t02_registrations.up.sql`, `db/migrations/000001_t02_registrations.down.sql`, `db/migrations/embed.go`, `db/queries/registrations.sql`
+- `internal/database/sqlc/db.go`, `internal/database/sqlc/models.go`, `internal/database/sqlc/registrations.sql.go`
+- `internal/domain/domain.go`, `internal/migrations/migrations.go`, `internal/repository/postgres.go`, `internal/application/service.go`, `internal/httpapi/server.go`, `internal/httpapi/server_integration_test.go`
+- `cmd/api/main.go`, `cmd/api/main_test.go`, `cmd/migrate/main.go`, `cmd/seed/main.go`
+- `docs/openapi/openapi.yaml`, `docs/architecture/architecture.md`, `docs/ai/prompt-log.md`
+
+### Evidence
+
+- PostgreSQL migrations define foreign keys, check constraints, unique normalized
+  truck plates, unique `scale_id`, a partial unique index for one `OPEN`
+  transaction per truck, and immutable transaction price/margin snapshots.
+- API keys are bcrypt-hashed before persistence and are omitted from responses.
+- Real PostgreSQL integration scenarios cover registration CRUD/deactivation,
+  invalid operations with no extra transport row, valid OPEN snapshot creation,
+  controlled cancellation, and concurrent OPEN creation (one 201 and one 409).
+- No Redis worker, stream consumer, or stabilization logic was added.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.29.0 generate` | Passed; generated typed pgx/v5 query bindings. |
+| `gofmt -w $(find . -type f -name '*.go' -not -path './vendor/*')` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed. |
+| `go test -race ./...` | Passed. |
+| `make verify` | Passed; includes real PostgreSQL CRUD Gherkin integration tests, base Testcontainers tests, race tests, and acceptance tests. |
+| `docker build --target api|worker|simulator|test ...` | All four targets passed. |
+| `docker compose up --build -d` | Blocked: Docker Compose v2 is unavailable locally (`unknown flag: --build`). |
+
+## T01 QA review — 2026-07-17
+
+### Exact prompt
+
+```text
+My docker-compose version is :
+
+docker-compose version
+
+Docker Compose version 5.3.1
+
+Another point: I believe the IDs shouldn't be of type TEXT. Also, before deleting a table, we should check if it exists first.
+
+Act as the QA Specialist.
+Review the T01 implementation against the playbook.
+Run the required checks and report only:
+- passed scenarios;
+- failed scenarios;
+- missing requirements;
+- risks;
+- required corrections.
+Do not implement new functionality.
+
+Update docs/ai/prompt-log.md with evidence.
+```
+
+### Files changed
+
+- `docs/ai/prompt-log.md`
+
+### QA evidence and results
+
+| Command | Result |
+| --- | --- |
+| `docker-compose version` | Passed: Docker Compose version 5.3.1 is installed. This supersedes prior evidence that used the unavailable `docker compose` plugin. |
+| `gofmt -d $(find . -type f -name '*.go' -not -path './vendor/*')` | Passed: no formatting diff. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed. |
+| `go test -race ./...` | Passed. |
+| `make verify` | Passed on the host: formatting, vet, unit, integration, race, and acceptance. |
+| `docker-compose config -q` | Passed. |
+| `docker-compose up --build -d` | Passed. API, PostgreSQL, and Redis reached `healthy`; `/health/live` and `/health/ready` both returned HTTP 200. Migrations completed successfully. |
+| `docker-compose run --rm seed` | Passed: deterministic seed data applied. |
+| `docker-compose --profile simulator run --rm simulator` (twice) | Passed: each execution prepared five events with seed 42. It does not emit or deliver the event sequence. |
+| `docker-compose --profile simulator run --rm simulator --seed -1` | Passed negative check: rejected invalid seed without a secret in output. |
+| `docker-compose run --rm -e DATABASE_URL= -e REDIS_ADDR= worker` | Passed negative check: worker rejected missing `DATABASE_URL` without exposing a supplied secret. |
+| `go test -tags=acceptance -v ./tests/acceptance/...` | Partial: fixture and error scenarios passed; `TestGherkinSuccessFullEnvironment` was skipped because it invokes unavailable `docker compose version`, despite installed `docker-compose` 5.3.1. |
+| `docker-compose` test service (`make verify`) | Failed: `go test -race ./...` exits because the Docker `test` target has `CGO_ENABLED=0`; the host race check passes. |
+
+### Blockers
+
+- None for the host validation or real `docker-compose` stack validation.
+- The automated full-environment Gherkin test is blocked by its incorrect Compose executable selection; this is a repository correction, not an environment blocker.
+- The Compose `test` service cannot complete its required race check until its build configuration permits CGO.
+
+## T01 QA corrections — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+- Specialist Architect;
+- Backend Developer 2;
+- QA Specialist.
+
+
+Adjust corrections required for QA Specialist.
+```
+
+### Files changed
+
+- `Dockerfile`, `docker-compose.yml`, `README.md`
+- `cmd/worker/main.go`, `cmd/worker/main_test.go`
+- `cmd/simulator/main.go`
+- `internal/simulator/simulator.go`, `internal/simulator/simulator_test.go`
+- `tests/acceptance/compose_test.go`
+- `testdata/scenarios/happy-path.json`
+- `docs/ai/prompt-log.md`
+
+### Corrections and scope boundary
+
+- The worker now has a real health probe that verifies both PostgreSQL and
+  Redis. Compose waits on and reports the worker health state.
+- The Docker test stage explicitly enables CGO and installs the C compiler
+  needed by the Go race detector. Its test inputs now include
+  `docker-compose.yml`.
+- Acceptance detects the available `docker-compose` executable before falling
+  back to `docker compose`. It starts an isolated, dynamically port-mapped
+  Compose project; waits for API, worker, PostgreSQL, and Redis health; applies
+  the seed; compares two emitted seed-42 JSONL event sequences; and removes the
+  project through `t.Cleanup`.
+- The simulator now emits each deterministic event as JSONL. The happy-path
+  data contains arrival, two 30-sample stable windows, an outlier, and release.
+  HTTP delivery remains deferred to T03.
+- `testkit.New(t)` continues to start containers only when a test opts in, as
+  required by the T01-specific specification. The broader playbook's T02
+  fixture helpers require registration-domain work and were not added by these
+  T01-role owners.
+- PostgreSQL ID type and rollback-table-existence changes are T02 migration
+  ownership (Backend Developer 1) and were deliberately not modified.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `gofmt -w cmd/worker/main.go cmd/worker/main_test.go cmd/simulator/main.go internal/simulator/simulator.go internal/simulator/simulator_test.go tests/acceptance/compose_test.go` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed. |
+| `go test -race ./...` | Passed. |
+| `go test -run TestGherkinSuccessFullEnvironment -tags=acceptance -v ./tests/acceptance/...` | Passed: isolated Compose API, worker, PostgreSQL, and Redis became healthy; seed succeeded; two seed-42 simulator JSONL sequences matched. |
+| `docker-compose build test` | Passed. Classic builder was used because Buildx is not installed. |
+| `docker-compose run --rm test` | Passed: container `make verify`, including `go test -race ./...`, succeeded. |
+| `docker-compose config -q` | Passed. |
+| `docker-compose down --volumes --remove-orphans` | Passed: removed temporary validation containers, network, and any Compose volume. |
+| `make verify` | Passed: format check, vet, unit, integration, race, and real Compose acceptance. |
+
+### Blockers
+
+- None within the authorized T01 Architect, Backend Developer 2, and QA scope.
+- T02 typed identifiers and guarded down-migration drops remain an explicit
+  ownership boundary requiring Backend Developer 1 authorization.

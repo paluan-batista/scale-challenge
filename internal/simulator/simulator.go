@@ -49,11 +49,11 @@ type ScenarioReading struct {
 
 // Event is the deterministic output used by a future HTTP transport adapter.
 type Event struct {
-	EventID     string
-	ScaleID     string
-	Plate       string
-	WeightGrams int64
-	MeasuredAt  time.Time
+	EventID     string    `json:"event_id"`
+	ScaleID     string    `json:"scale_id"`
+	Plate       string    `json:"plate"`
+	WeightGrams int64     `json:"weight_grams"`
+	MeasuredAt  time.Time `json:"measured_at"`
 }
 
 // Load decodes and validates a scenario without contacting a service.

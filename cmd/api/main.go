@@ -11,7 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"scale-challenge/internal/application"
 	"scale-challenge/internal/bootstrap"
+	"scale-challenge/internal/httpapi"
+	"scale-challenge/internal/repository"
 )
 
 func main() {
@@ -22,17 +27,32 @@ func main() {
 		}
 		return
 	}
-	if err := bootstrap.RequiredEnvironment("DATABASE_URL", "REDIS_ADDR"); err != nil {
+	if err := bootstrap.RequiredEnvironment("DATABASE_URL"); err != nil {
 		log.Print(err)
 		os.Exit(2)
 	}
+	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), 10*time.Second)
+	database, err := pgxpool.New(databaseContext, os.Getenv("DATABASE_URL"))
+	if err == nil {
+		err = database.Ping(databaseContext)
+	}
+	cancelDatabase()
+	if err != nil {
+		if database != nil {
+			database.Close()
+		}
+		log.Printf("connect PostgreSQL: %v", err)
+		os.Exit(1)
+	}
+	defer database.Close()
 
 	address := os.Getenv("API_ADDR")
 	if address == "" {
 		address = ":8080"
 	}
 
-	server := newServer(address)
+	service := application.New(repository.NewPostgres(database))
+	server := newServer(address, httpapi.New(service).Router())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -51,10 +71,11 @@ func main() {
 	}
 }
 
-func newServer(address string) *http.Server {
+func newServer(address string, applicationHandler http.Handler) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", healthHandler)
 	mux.HandleFunc("GET /health/ready", healthHandler)
+	mux.Handle("/v1/", applicationHandler)
 
 	return &http.Server{
 		Addr:              address,

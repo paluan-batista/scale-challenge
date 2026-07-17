@@ -3,12 +3,17 @@
 package acceptance
 
 import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"scale-challenge/internal/simulator"
 )
@@ -44,11 +49,66 @@ func TestFoundationTopologyAndDeterministicScenarioFixture(t *testing.T) {
 }
 
 func TestGherkinSuccessFullEnvironment(t *testing.T) {
-	command := exec.Command("docker", "compose", "version")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Skipf("Docker Compose v2 prerequisite is unavailable: %s", strings.TrimSpace(string(output)))
+	compose, available := newComposeRunner(t)
+	if !available {
+		t.Skip("Docker Compose executable is unavailable in this test environment")
 	}
-	t.Skip("blocked: the migration and seed commands required by this scenario belong to T02 and are not available in T01")
+	if output, err := compose.run("version"); err != nil {
+		t.Skipf("Docker Compose prerequisite is unavailable: %s", strings.TrimSpace(string(output)))
+	}
+	t.Cleanup(func() {
+		if output, err := compose.run("down", "--volumes", "--remove-orphans"); err != nil {
+			t.Logf("compose cleanup failed: %v: %s", err, strings.TrimSpace(string(output)))
+		}
+	})
+
+	if output, err := compose.run("up", "--build", "-d"); err != nil {
+		t.Fatalf("start Compose environment: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	for _, service := range []string{"api", "worker", "postgres", "redis"} {
+		if err := compose.waitForHealth(service); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if response, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://127.0.0.1:" + compose.apiPort + "/health/ready"); err != nil {
+		t.Fatalf("call API readiness endpoint: %v", err)
+	} else if response.StatusCode != http.StatusOK {
+		_ = response.Body.Close()
+		t.Fatalf("API readiness status = %d, want %d", response.StatusCode, http.StatusOK)
+	} else {
+		_ = response.Body.Close()
+	}
+	if output, err := compose.run("run", "--rm", "seed"); err != nil {
+		t.Fatalf("apply deterministic seed: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	firstOutput, err := compose.run("--profile", "simulator", "run", "--rm", "simulator")
+	if err != nil {
+		t.Fatalf("run first simulator sequence: %v: %s", err, strings.TrimSpace(string(firstOutput)))
+	}
+	secondOutput, err := compose.run("--profile", "simulator", "run", "--rm", "simulator")
+	if err != nil {
+		t.Fatalf("run second simulator sequence: %v: %s", err, strings.TrimSpace(string(secondOutput)))
+	}
+	if got, want := jsonLines(firstOutput), jsonLines(secondOutput); len(got) == 0 || !reflect.DeepEqual(got, want) {
+		t.Fatal("seed 42 did not produce a repeatable emitted event sequence")
+	}
+
+	scenario, err := simulator.Load(filepath.Join("..", "..", "testdata", "scenarios", "happy-path.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := simulator.Sequence(scenario, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := simulator.Sequence(scenario, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("seed 42 did not produce a repeatable event sequence")
+	}
 }
 
 func TestGherkinErrorInvalidSimulatorConfigurationFailsWithoutSecret(t *testing.T) {
@@ -113,4 +173,79 @@ func withoutEnvironment(names ...string) []string {
 		retained = append(retained, entry)
 	}
 	return retained
+}
+
+type composeRunner struct {
+	path    string
+	prefix  []string
+	env     []string
+	apiPort string
+}
+
+func newComposeRunner(t testing.TB) (composeRunner, bool) {
+	t.Helper()
+	path, err := exec.LookPath("docker-compose")
+	prefix := []string{}
+	if err != nil {
+		path, err = exec.LookPath("docker")
+		prefix = []string{"compose"}
+	}
+	if err != nil {
+		return composeRunner{}, false
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve local API port: %v", err)
+	}
+	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release local API port: %v", err)
+	}
+	project := fmt.Sprintf("scale-challenge-acceptance-%d", os.Getpid())
+	return composeRunner{
+		path:    path,
+		prefix:  prefix,
+		apiPort: port,
+		env: append(os.Environ(),
+			"COMPOSE_PROJECT_NAME="+project,
+			"API_PORT="+port,
+		),
+	}, true
+}
+
+func (runner composeRunner) run(arguments ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, runner.path, append(runner.prefix, append([]string{"-f", filepath.Join("..", "..", "docker-compose.yml")}, arguments...)...)...)
+	command.Env = runner.env
+	return command.CombinedOutput()
+}
+
+func (runner composeRunner) waitForHealth(service string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	for {
+		output, err := runner.run("ps", service)
+		if err == nil && strings.Contains(string(output), "healthy") {
+			return nil
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("Compose service %q did not become healthy: %w; last output: %s", service, ctx.Err(), strings.TrimSpace(string(output)))
+		case <-timer.C:
+		}
+	}
+}
+
+func jsonLines(output []byte) []string {
+	var events []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
+			events = append(events, line)
+		}
+	}
+	return events
 }

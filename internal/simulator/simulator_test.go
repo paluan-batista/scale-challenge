@@ -26,6 +26,15 @@ func TestHappyPathSequenceIsDeterministic(t *testing.T) {
 	if len(first) == 0 || first[0].EventID == "" {
 		t.Fatal("sequence did not produce a deterministic event ID")
 	}
+	if len(first) != 66 {
+		t.Fatalf("happy-path event count = %d, want 66 (arrival, two windows, and release)", len(first))
+	}
+	if first[20].WeightGrams != 42870000 {
+		t.Fatalf("happy-path outlier = %d, want 42870000", first[20].WeightGrams)
+	}
+	if got := first[len(first)-1].WeightGrams; got != 5000 {
+		t.Fatalf("happy-path release weight = %d, want 5000", got)
+	}
 	differentSeed, err := Sequence(scenario, 43)
 	if err != nil {
 		t.Fatal(err)

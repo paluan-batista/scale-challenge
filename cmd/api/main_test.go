@@ -7,7 +7,7 @@ import (
 )
 
 func TestHealthEndpoints(t *testing.T) {
-	server := newServer(":0")
+	server := newServer(":0", http.NotFoundHandler())
 	for _, path := range []string{"/health/live", "/health/ready"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
@@ -21,7 +21,7 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestHealthEndpointsRejectUnsupportedMethods(t *testing.T) {
-	server := newServer(":0")
+	server := newServer(":0", http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodPost, "/health/live", nil)
 	response := httptest.NewRecorder()
 

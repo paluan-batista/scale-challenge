@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -35,5 +36,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	log.Printf("simulator prepared %d deterministic events for %s at %dms; HTTP delivery starts in T03", len(events), *baseURL, scenario.FrequencyMS)
+	encoder := json.NewEncoder(os.Stdout)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			log.Printf("write deterministic event: %v", err)
+			os.Exit(1)
+		}
+	}
+	log.Printf("simulator emitted %d deterministic events for %s at %dms; HTTP delivery starts in T03", len(events), *baseURL, scenario.FrequencyMS)
 }

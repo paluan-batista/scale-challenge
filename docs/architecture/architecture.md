@@ -35,6 +35,18 @@ recovery and final-weighing idempotency must be designed explicitly in T04-T06.
 - The `make verify` gate runs formatting, vet, unit, integration-tag, race, and
   acceptance-tag suites. It does not run Compose automatically.
 
+## T02 registration contract
+
+T02 keeps registration CRUD and transport state in the same API process and
+PostgreSQL database. SQLC-generated queries are the repository boundary;
+handlers call application services, never SQL directly. Registrations are
+deactivated rather than deleted, preserving transaction references. Truck plates
+and scale IDs are normalized before persistence, and PostgreSQL enforces their
+uniqueness plus one `OPEN` transaction per truck through a partial unique index.
+Weight remains `int64` grams and price is an explicit `BIGINT` minor unit.
+Scale secrets are accepted only to create a bcrypt `api_key_hash`; API responses
+never return the source key or hash. Redis remains unused by this task.
+
 ## Verification criteria
 
 `make verify` must pass without Docker dependencies. `docker compose up --build`
