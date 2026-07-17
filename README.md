@@ -26,14 +26,14 @@ generated `.env` file. Compose starts PostgreSQL, Redis, the migration job, API,
 worker, Prometheus, and Grafana. To load the deterministic sample entities:
 
 ```bash
-docker compose --profile tools run --rm seed
+docker-compose --profile tools run --rm seed
 ```
 
 To inspect or stop the environment:
 
 ```bash
-docker compose logs -f api worker
-docker compose down --volumes --remove-orphans
+docker-compose logs -f api worker
+docker-compose down --volumes --remove-orphans
 ```
 
 If your installation uses the standalone Compose client, replace `docker
