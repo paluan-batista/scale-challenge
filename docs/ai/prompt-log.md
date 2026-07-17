@@ -490,3 +490,204 @@ Do not implement worker consumption yet.
 
 - None. Redis Streams consumption, ACK/recovery/DLQ, and final-weighing
   persistence remain intentionally deferred to T05 and T06.
+
+## T05 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Backend Developer 2;
+- QA Specialist;
+- Specialist Architect for review only.
+
+Implement T05 only: Redis Streams worker, reliable processing, pending recovery,
+and dead-letter queue.
+
+Requirements:
+- Create stream scale-readings, consumer group weighing-workers, and
+  scale-readings-dlq.
+- Use XREADGROUP with bounded batches and a unique consumer name per worker instance.
+- ACK only after successful idempotent processing and persistence.
+- Use XAUTOCLAIM or equivalent for idle pending messages.
+- Configure block time, batch size, pending idle timeout, and retry limit.
+- Never ACK transient Redis or PostgreSQL failures.
+- Move permanently invalid or exhausted messages to DLQ with original event,
+  reason, and attempt count, then ACK the original.
+- Add metrics for processed, pending, reclaimed, DLQ, and failures.
+- Use real Redis and PostgreSQL tests. Do not mock ACK, pending, reclaim, or DLQ.
+- Implement both T05 Gherkin scenarios.
+
+Run all validation commands and update docs/ai/prompt-log.md.
+Do not implement financial finalization beyond the minimum required integration point.
+```
+
+### Files changed
+
+- `.env.example`, `docker-compose.yml`, `cmd/worker/main.go`, and
+  `cmd/worker/main_test.go`
+- `db/migrations/000002_t05_processed_events.up.sql` and
+  `db/migrations/000002_t05_processed_events.down.sql`
+- `internal/worker/worker.go` and `internal/worker/worker_integration_test.go`
+- `docs/ai/prompt-log.md`
+
+### Implementation and architecture review
+
+- The worker creates the `scale-readings` source stream and the stable
+  `weighing-workers` group, then reads new work through bounded `XREADGROUP`
+  calls. Each process receives a UUID-based consumer name.
+- Recovery uses bounded `XAUTOCLAIM` batches for entries idle longer than
+  `WORKER_PENDING_IDLE_TIMEOUT`; retry metadata is a TTL-bounded Redis side
+  key. Batch size, block time, pending idle timeout, and retry limit are
+  configured by environment variables with conservative defaults.
+- PostgreSQL contains only `processed_scale_events`, an idempotency ledger with
+  unique event and stream IDs. It deliberately stores no raw readings and does
+  not perform any T06 weighing, inventory, cost, margin, or transaction-state
+  finalization. This is the minimum durable processing integration point before
+  `XACK`.
+- Invalid events and retry-exhausted transient failures use one Redis Lua
+  transaction: `XADD` the complete original event, source ID, reason, and
+  attempt count to `scale-readings-dlq`, then `XACK` the original entry and
+  delete its retry key. A Redis/PostgreSQL failure before that point leaves the
+  source message pending.
+- The worker exposes sampled pending PEL count plus monotonic processed,
+  reclaimed, DLQ, and failure counters. No background goroutines are started;
+  `Run` and all I/O are context-cancellable.
+- Architecture review: Redis remains a buffer, PostgreSQL remains the source
+  of durable idempotency, and a failed ACK is safely replayed as an idempotent
+  PostgreSQL no-op. The implementation does not claim that this ledger is
+  financial finalization; the future T06 transaction remains the required
+  boundary for final weighings and inventory.
+
+### QA evidence
+
+- Real PostgreSQL 16 and Redis 7 Testcontainers prove the first Gherkin
+  scenario: a real pending entry is reclaimed with `XAUTOCLAIM`, persisted, and
+  removed from the Redis PEL only after the ledger write.
+- The recovery scenario cancels a real context after PostgreSQL persistence and
+  before the real `XACK`; another consumer reclaims it and proves the database
+  has exactly one ledger row. ACK, PEL inspection, reclaim, and DLQ are never
+  mocked.
+- Separate real-Redis coverage proves a transient processor failure stays
+  pending until its configured retry limit, then carries the original event,
+  reason, and attempt count to the DLQ. A malformed event is immediately sent
+  to the same DLQ path.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `gofmt -w internal/worker/worker.go internal/worker/worker_integration_test.go cmd/worker/main.go cmd/worker/main_test.go` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed, including real Redis/PostgreSQL worker scenarios. |
+| `go test -race ./...` | Passed. |
+| `make verify` | Passed: format check, vet, unit/integration, race, and acceptance targets. |
+| `docker build --target worker -t scale-worker:t06 .` | Passed. |
+| `docker build --target worker -t scale-worker:t05 .` | Passed. |
+
+### Blockers
+
+- None.
+
+## T06 — 2026-07-17
+
+### Exact prompt
+
+```text
+Read docs/context/scale-challenge-codex-playbook.md.
+
+Act only as:
+- Product Owner;
+- Backend Developer 1;
+- Backend Developer 2;
+- QA Specialist.
+
+Implement T06 only: transactional final weighing, inventory, financial calculation,
+and idempotency.
+
+Requirements:
+- In one PostgreSQL transaction:
+  1. lock and validate the OPEN transport transaction;
+  2. calculate net_weight_grams = gross_weight_grams - tare_weight_grams;
+  3. reject net weight less than or equal to zero;
+  4. calculate load cost from tons and purchase price;
+  5. update branch/grain inventory;
+  6. calculate margin from 5% to 20%, inversely proportional to
+     inventory / inventory_target;
+  7. snapshot purchase price and applied margin;
+  8. insert final weighing;
+  9. transition transport transaction to WEIGHED.
+- Use int64 for grams and NUMERIC or fixed smallest units for money.
+- Add uniqueness for final weighing by session_id and stage.
+- Add event_id idempotency when event_id exists.
+- Test rollback, duplicate event, invalid net weight, nonexistent/open transaction,
+  and two concurrent workers finalizing the same session.
+- Implement every T06 Gherkin scenario.
+
+Run all validation commands and update docs/ai/prompt-log.md.
+Do not start reporting yet.
+```
+
+### Files changed
+
+- `cmd/worker/main.go`
+- `db/migrations/000003_t06_final_weighings.up.sql` and
+  `db/migrations/000003_t06_final_weighings.down.sql`
+- `internal/finalization/finalization.go` and
+  `internal/finalization/finalization_integration_test.go`
+- `internal/worker/finalizing_processor.go` and
+  `internal/worker/finalizing_processor_integration_test.go`
+- `docs/ai/prompt-log.md`
+
+### Implementation and product evidence
+
+- `finalization.Service` runs the entire financial write path in one PostgreSQL
+  transaction. It locks the transport transaction, verifies it remains `OPEN`,
+  derives net grams, computes rounded cost in integer minor units using
+  PostgreSQL `NUMERIC`, updates branch/grain inventory, derives the margin in
+  integer basis points, writes the immutable weighing, and marks the transport
+  `WEIGHED` before committing.
+- The applied margin is `2000 - floor(1500 * clamp(inventory / target, 0, 1))`
+  basis points, producing an inclusive 5%–20% range without floating point.
+  Purchase price and applied margin are stored on each weighing. Cost uses a
+  fixed minor-unit price per metric ton and `1_000_000_000` grams per ton.
+- Schema constraints preserve positive net weight and fixed-unit values;
+  `UNIQUE(session_id, stage)` prevents duplicate final weighing sessions and a
+  partial unique `event_id` index makes supplied event IDs idempotent.
+- The worker now passes stabilized final readings into the transaction and
+  retains a pending event work item until PostgreSQL succeeds. Transient
+  persistence errors therefore remain pending for the existing T05 recovery
+  flow; validation, missing transaction, and non-OPEN errors are permanent.
+- No reporting endpoint, aggregate query, or T07 behavior was introduced.
+
+### QA evidence
+
+- Real PostgreSQL tests prove successful one-transaction finalization with a
+  2-ton net load, 250,000 minor-unit cost, 2-billion-gram inventory, and 1,250
+  applied-margin basis points; the transport becomes `WEIGHED`.
+- Invalid net weight, nonexistent transport, and a cancelled/non-OPEN
+  transport leave no weighing or inventory row. Repeating the same event ID
+  returns the original weighing and does not increment inventory.
+- Two concurrent finalizers on the same `(session_id, stage)` yield exactly one
+  weighing and one inventory update. A caller that observes the committed
+  winner returns that same idempotent result; a true insert race rolls back its
+  losing transaction completely.
+- A real Redis 7 and PostgreSQL 16 worker scenario sends 31 ordered stable
+  samples (the candidate and second stable window), verifies a single final
+  weighing, `WEIGHED` transport, final inventory, and no pending stream entry.
+
+### Commands and results
+
+| Command | Result |
+| --- | --- |
+| `gofmt -w cmd/worker/main.go internal/finalization/finalization.go internal/finalization/finalization_integration_test.go internal/worker/finalizing_processor.go internal/worker/finalizing_processor_integration_test.go` | Passed. |
+| `go vet ./...` | Passed. |
+| `go test ./...` | Passed, including real PostgreSQL and Redis scenarios. |
+| `go test -race ./...` | Passed. |
+| `make verify` | Passed: format check, vet, unit/integration, race, and acceptance targets. |
+
+### Blockers
+
+- None.

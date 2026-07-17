@@ -25,3 +25,17 @@ func TestWorkerHealthCheckDoesNotReadUnrelatedSecret(t *testing.T) {
 		t.Fatalf("health error leaked secret: %q", got)
 	}
 }
+
+func TestWorkerConfigReadsBoundedStreamSettings(t *testing.T) {
+	t.Setenv("WORKER_BATCH_SIZE", "7")
+	t.Setenv("WORKER_BLOCK_TIMEOUT", "250ms")
+	t.Setenv("WORKER_PENDING_IDLE_TIMEOUT", "2s")
+	t.Setenv("WORKER_RETRY_LIMIT", "4")
+	config, err := workerConfigFromEnvironment()
+	if err != nil {
+		t.Fatalf("workerConfigFromEnvironment() error = %v", err)
+	}
+	if config.BatchSize != 7 || config.BlockTimeout.String() != "250ms" || config.PendingIdleTimeout.String() != "2s" || config.RetryLimit != 4 {
+		t.Fatalf("config = %+v, want configured bounded values", config)
+	}
+}

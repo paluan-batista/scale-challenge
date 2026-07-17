@@ -68,6 +68,10 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-scale}:${POSTGRES_PASSWORD:-scale-local-only}@postgres:5432/${POSTGRES_DB:-scale}?sslmode=disable
       REDIS_ADDR: redis:6379
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-32}
+      WORKER_BLOCK_TIMEOUT: ${WORKER_BLOCK_TIMEOUT:-1s}
+      WORKER_PENDING_IDLE_TIMEOUT: ${WORKER_PENDING_IDLE_TIMEOUT:-30s}
+      WORKER_RETRY_LIMIT: ${WORKER_RETRY_LIMIT:-3}
     depends_on:
       postgres:
         condition: service_healthy
