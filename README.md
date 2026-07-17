@@ -15,8 +15,8 @@ Prerequisites: Docker Engine, Docker Compose v2, and free local ports `8080`,
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
-docker compose ps
+docker-compose up --build -d
+docker-compose ps
 curl --fail http://localhost:8080/health/live
 curl --fail http://localhost:8080/health/ready
 ```
